@@ -100,6 +100,8 @@ enum clientmode {
 struct tcp_client {
 	int netsock;
 	struct in6_addr address;
+	struct alfred_tlv *packet;
+	uint16_t read;
 
 	struct list_head list;
 };
@@ -165,6 +167,7 @@ int alfred_client_change_interface(struct globals *globals);
 /* recv.c */
 int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		       int recv_sock);
+int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client);
 struct transaction_head *
 transaction_add(struct globals *globals, struct ether_addr mac, uint16_t id);
 struct transaction_head *

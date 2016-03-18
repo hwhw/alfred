@@ -87,6 +87,7 @@ void netsock_close_all(struct globals *globals)
 			shutdown(tcp_client->netsock, SHUT_RDWR);
 			close(tcp_client->netsock);
 			list_del(&tcp_client->list);
+			free(tcp_client->packet);
 			free(tcp_client);
 		}
 		if (interface->netsock >= 0)
@@ -439,6 +440,7 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 				shutdown(tcp_client->netsock, SHUT_RDWR);
 				close(tcp_client->netsock);
 				list_del(&tcp_client->list);
+				free(tcp_client->packet);
 				free(tcp_client);
 			}
 		}
@@ -494,14 +496,12 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 
 		list_for_each_entry_safe(tcp_client, tc, &interface->tcp_clients, list) {
 			if (FD_ISSET(tcp_client->netsock, fds)) {
-				// TODO: handle request on TCP socket
-				// for now, this reads and drops all data
-				unsigned char data[512];
-				if(read(tcp_client->netsock, data, 512) < 1) {
-					// fd is set, but no data available: connection closed.
+				if(recv_alfred_stream(globals, tcp_client)) {
+					/* upon error, close and free TCP connection */
 					shutdown(tcp_client->netsock, SHUT_RDWR);
 					close(tcp_client->netsock);
 					list_del(&tcp_client->list);
+					free(tcp_client->packet);
 					free(tcp_client);
 				}
 				recvs++;
@@ -513,18 +513,43 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 			sock_client = accept(interface->netsock_tcp, (struct sockaddr *)&sin6, &sin6_len);
 			if(sock_client < 0) {
 				perror("can't accept TCP connection");
-			} else {
-				tcp_client = malloc(sizeof(*tcp_client));
-				if(!tcp_client) {
-					fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
-					shutdown(sock_client, SHUT_RDWR);
-					close(sock_client);
-				} else {
-					tcp_client->netsock = sock_client;
-					memcpy(&tcp_client->address, &sin6.sin6_addr, sizeof(tcp_client->address));
-					list_add(&tcp_client->list, &interface->tcp_clients);
-				}
+				goto tcp_done;
 			}
+
+			// TODO: this check can probably be omitted.
+			/* drop packets not sent over link-local ipv6 */
+			if (!is_ipv6_eui64(&sin6.sin6_addr)) {
+				fprintf(stderr, "not handling TCP connection from non-link-local address\n");
+				goto tcp_drop;
+			}
+
+			// TODO: this check can probably be omitted.
+			/* drop packets from ourselves */
+			if (netsock_own_address(globals, &sin6.sin6_addr)) {
+				fprintf(stderr, "not handling TCP connection from ourselves\n");
+				goto tcp_drop;
+			}
+
+			tcp_client = malloc(sizeof(*tcp_client));
+			if(!tcp_client) {
+				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
+				goto tcp_drop;
+			}
+			tcp_client->packet = malloc(sizeof(struct alfred_tlv));
+			if(!tcp_client->packet) {
+				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
+				free(tcp_client);
+				goto tcp_drop;
+			}
+			tcp_client->read = 0;
+			tcp_client->netsock = sock_client;
+			memcpy(&tcp_client->address, &sin6.sin6_addr, sizeof(tcp_client->address));
+			list_add(&tcp_client->list, &interface->tcp_clients);
+			goto tcp_done;
+tcp_drop:
+			shutdown(sock_client, SHUT_RDWR);
+			close(sock_client);
+tcp_done:
 			recvs++;
 		}
 	}
