@@ -86,6 +86,8 @@ void netsock_close_all(struct globals *globals)
 			close(interface->netsock);
 		if (interface->netsock_mcast >= 0)
 			close(interface->netsock_mcast);
+		if (interface->netsock_tcp >= 0)
+			close(interface->netsock_tcp);
 		list_del(&interface->list);
 		hash_delete(interface->server_hash, free);
 		free(interface->interface);
@@ -147,6 +149,7 @@ int netsock_set_interfaces(struct globals *globals, char *interfaces)
 		interface->interface = NULL;
 		interface->netsock = -1;
 		interface->netsock_mcast = -1;
+		interface->netsock_tcp = -1;
 		interface->server_hash = NULL;
 
 		interface->interface = strdup(token);
@@ -164,6 +167,8 @@ int netsock_set_interfaces(struct globals *globals, char *interfaces)
 			netsock_close_all(globals);
 			return -ENOMEM;
 		}
+
+		INIT_LIST_HEAD(&interface->tcp_clients);
 
 		list_add(&interface->list, &globals->interfaces);
 	}
@@ -214,6 +219,7 @@ static int netsock_open(struct interface *interface)
 {
 	int sock;
 	int sock_mc;
+	int sock_tcp;
 	struct sockaddr_in6 sin6, sin6_mc;
 	struct ipv6_mreq mreq;
 	struct ifreq ifr;
@@ -221,6 +227,7 @@ static int netsock_open(struct interface *interface)
 
 	interface->netsock = -1;
 	interface->netsock_mcast = -1;
+	interface->netsock_tcp = -1;
 
 	sock = socket(PF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock  < 0) {
@@ -231,6 +238,14 @@ static int netsock_open(struct interface *interface)
 	sock_mc = socket(PF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock_mc  < 0) {
 		close(sock);
+		perror("can't open socket");
+		return -1;
+	}
+
+	sock_tcp = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	if (sock_tcp < 0) {
+		close(sock);
+		close(sock_mc);
 		perror("can't open socket");
 		return -1;
 	}
@@ -286,6 +301,16 @@ static int netsock_open(struct interface *interface)
 		goto err;
 	}
 
+	if (bind(sock_tcp, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
+		perror("can't bind");
+		goto err;
+	}
+
+	if (listen(sock_tcp, 10) < 0) {
+		perror("can't listen on tcp socket");
+		goto err;
+	}
+
 	if (bind(sock_mc, (struct sockaddr *)&sin6_mc, sizeof(sin6_mc)) < 0) {
 		perror("can't bind");
 		goto err;
@@ -327,11 +352,13 @@ static int netsock_open(struct interface *interface)
 
 	interface->netsock = sock;
 	interface->netsock_mcast = sock_mc;
+	interface->netsock_tcp = sock_tcp;
 
 	return 0;
 err:
 	close(sock);
 	close(sock_mc);
+	close(sock_tcp);
 	return -1;
 }
 
@@ -363,6 +390,7 @@ void netsock_reopen(struct globals *globals)
 int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 {
 	struct interface *interface;
+	struct tcp_client *tcp_client;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		if (interface->netsock >= 0) {
@@ -376,6 +404,18 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 			if (maxsock < interface->netsock_mcast)
 				maxsock = interface->netsock_mcast;
 		}
+
+		if (interface->netsock_tcp >= 0) {
+			FD_SET(interface->netsock_tcp, fds);
+			if (maxsock < interface->netsock_tcp)
+				maxsock = interface->netsock_tcp;
+		}
+
+		list_for_each_entry(tcp_client, &interface->tcp_clients, list) {
+			FD_SET(tcp_client->netsock, fds);
+			if (maxsock < tcp_client->netsock)
+				maxsock = tcp_client->netsock;
+		}
 	}
 
 	return maxsock;
@@ -384,12 +424,23 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 void netsock_check_error(struct globals *globals, fd_set *errfds)
 {
 	struct interface *interface;
+	struct tcp_client *tcp_client, *tc;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
+		list_for_each_entry_safe(tcp_client, tc, &interface->tcp_clients, list) {
+			if(FD_ISSET(tcp_client->netsock, errfds)) {
+				shutdown(tcp_client->netsock, SHUT_RDWR);
+				close(tcp_client->netsock);
+				list_del(&tcp_client->list);
+			}
+		}
+
 		if ((interface->netsock < 0 ||
 		     !FD_ISSET(interface->netsock, errfds)) &&
 		    (interface->netsock_mcast < 0 ||
-		     !FD_ISSET(interface->netsock_mcast, errfds)))
+		     !FD_ISSET(interface->netsock_mcast, errfds)) &&
+		    (interface->netsock_tcp < 0 ||
+		     !FD_ISSET(interface->netsock_tcp, errfds)))
 			continue;
 
 		fprintf(stderr, "Error on netsock detected\n");
@@ -400,15 +451,21 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 		if (interface->netsock_mcast >= 0)
 			close(interface->netsock_mcast);
 
+		if (interface->netsock_tcp >= 0)
+			close(interface->netsock_tcp);
+
 		interface->netsock = -1;
 		interface->netsock_mcast = -1;
+		interface->netsock_tcp = -1;
 	}
 }
 
 int netsock_receive_packet(struct globals *globals, fd_set *fds)
 {
 	struct interface *interface;
+	struct tcp_client *tcp_client, *tc;
 	int recvs = 0;
+	int sock_client;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		if (interface->netsock >= 0 &&
@@ -422,6 +479,40 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 		    FD_ISSET(interface->netsock_mcast, fds)) {
 			recv_alfred_packet(globals, interface,
 					   interface->netsock_mcast);
+			recvs++;
+		}
+
+		list_for_each_entry_safe(tcp_client, tc, &interface->tcp_clients, list) {
+			if (FD_ISSET(tcp_client->netsock, fds)) {
+				// TODO: handle request on TCP socket
+				// for now, this reads and drops all data
+				unsigned char data[512];
+				if(read(tcp_client->netsock, data, 512) < 1) {
+					// fd is set, but no data available: connection closed.
+					shutdown(tcp_client->netsock, SHUT_RDWR);
+					close(tcp_client->netsock);
+					list_del(&tcp_client->list);
+				}
+				recvs++;
+			}
+		}
+
+		if (interface->netsock_tcp >= 0 &&
+			FD_ISSET(interface->netsock_tcp, fds)) {
+			sock_client = accept(interface->netsock_tcp, NULL, NULL);
+			if(sock_client < 0) {
+				perror("can't accept TCP connection");
+			} else {
+				tcp_client = malloc(sizeof(*tcp_client));
+				if(!tcp_client) {
+					fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
+					shutdown(sock_client, SHUT_RDWR);
+					close(sock_client);
+				} else {
+					tcp_client->netsock = sock_client;
+					list_add(&tcp_client->list, &interface->tcp_clients);
+				}
+			}
 			recvs++;
 		}
 	}

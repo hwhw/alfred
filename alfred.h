@@ -97,6 +97,12 @@ enum clientmode {
 	CLIENT_CHANGE_INTERFACE,
 };
 
+struct tcp_client {
+	int netsock;
+
+	struct list_head list;
+};
+
 struct interface {
 	struct ether_addr hwaddr;
 	struct in6_addr address;
@@ -104,6 +110,9 @@ struct interface {
 	char *interface;
 	int netsock;
 	int netsock_mcast;
+	int netsock_tcp;
+
+	struct list_head tcp_clients;
 
 	struct hashtable_t *server_hash;
 
