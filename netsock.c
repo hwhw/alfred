@@ -472,6 +472,8 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 {
 	struct interface *interface;
 	struct tcp_client *tcp_client, *tc;
+	struct sockaddr_in6 sin6;
+	socklen_t sin6_len = sizeof(sin6);
 	int recvs = 0;
 	int sock_client;
 
@@ -508,7 +510,7 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 
 		if (interface->netsock_tcp >= 0 &&
 			FD_ISSET(interface->netsock_tcp, fds)) {
-			sock_client = accept(interface->netsock_tcp, NULL, NULL);
+			sock_client = accept(interface->netsock_tcp, (struct sockaddr *)&sin6, &sin6_len);
 			if(sock_client < 0) {
 				perror("can't accept TCP connection");
 			} else {
@@ -519,6 +521,7 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 					close(sock_client);
 				} else {
 					tcp_client->netsock = sock_client;
+					memcpy(&tcp_client->address, &sin6.sin6_addr, sizeof(tcp_client->address));
 					list_add(&tcp_client->list, &interface->tcp_clients);
 				}
 			}

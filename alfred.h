@@ -99,6 +99,7 @@ enum clientmode {
 
 struct tcp_client {
 	int netsock;
+	struct in6_addr address;
 
 	struct list_head list;
 };
