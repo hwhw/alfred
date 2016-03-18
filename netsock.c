@@ -80,8 +80,15 @@ static int server_choose(void *d1, int size)
 void netsock_close_all(struct globals *globals)
 {
 	struct interface *interface, *is;
+	struct tcp_client *tcp_client, *tc;
 
 	list_for_each_entry_safe(interface, is, &globals->interfaces, list) {
+		list_for_each_entry_safe(tcp_client, tc, &interface->tcp_clients, list) {
+			shutdown(tcp_client->netsock, SHUT_RDWR);
+			close(tcp_client->netsock);
+			list_del(&tcp_client->list);
+			free(tcp_client);
+		}
 		if (interface->netsock >= 0)
 			close(interface->netsock);
 		if (interface->netsock_mcast >= 0)
@@ -432,6 +439,7 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 				shutdown(tcp_client->netsock, SHUT_RDWR);
 				close(tcp_client->netsock);
 				list_del(&tcp_client->list);
+				free(tcp_client);
 			}
 		}
 
@@ -492,6 +500,7 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 					shutdown(tcp_client->netsock, SHUT_RDWR);
 					close(tcp_client->netsock);
 					list_del(&tcp_client->list);
+					free(tcp_client);
 				}
 				recvs++;
 			}
