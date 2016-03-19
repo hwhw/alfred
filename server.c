@@ -222,7 +222,7 @@ static void check_if_socket(struct interface *interface)
 {
 	int sock;
 	struct ifreq ifr;
-	struct tcp_client *tcp_client, *tc;
+	struct tcp_connection *tcp_connection, *tc;
 
 	if (interface->netsock < 0)
 		return;
@@ -262,12 +262,12 @@ static void check_if_socket(struct interface *interface)
 	return;
 
 close:
-	list_for_each_entry_safe(tcp_client, tc, &interface->tcp_clients, list) {
-		shutdown(tcp_client->netsock, SHUT_RDWR);
-		close(tcp_client->netsock);
-		list_del(&tcp_client->list);
-		free(tcp_client->packet);
-		free(tcp_client);
+	list_for_each_entry_safe(tcp_connection, tc, &interface->tcp_connections, list) {
+		shutdown(tcp_connection->netsock, SHUT_RDWR);
+		close(tcp_connection->netsock);
+		list_del(&tcp_connection->list);
+		free(tcp_connection->packet);
+		free(tcp_connection);
 	}
 	close(interface->netsock);
 	close(interface->netsock_mcast);

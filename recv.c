@@ -447,7 +447,7 @@ int recv_alfred_packet(struct globals *globals, struct interface *interface,
 	return 0;
 }
 
-int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
+int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_connection)
 {
 	size_t to_read;
 	int res;
@@ -455,16 +455,16 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 	void *mem;
 
 	/* determine how many bytes we're still expecting */
-	if(tcp_client->read < header_len) {
+	if(tcp_connection->read < header_len) {
 		/* TLV header still incomplete */
-		to_read = header_len - tcp_client->read;
+		to_read = header_len - tcp_connection->read;
 	} else {
 		/* payload still incomplete */
-		to_read = header_len + ntohs(tcp_client->packet->length) - tcp_client->read;
+		to_read = header_len + ntohs(tcp_connection->packet->length) - tcp_connection->read;
 	}
 
-	res = recv(tcp_client->netsock,
-		(uint8_t*)tcp_client->packet + tcp_client->read,
+	res = recv(tcp_connection->netsock,
+		(uint8_t*)tcp_connection->packet + tcp_connection->read,
 		to_read, MSG_DONTWAIT);
 
 	if(res < 0) {
@@ -474,43 +474,43 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 		return -1;
 	}
 
-	tcp_client->read += res;
+	tcp_connection->read += res;
 
-	if(tcp_client->read == header_len && tcp_client->packet->length > 0) {
+	if(tcp_connection->read == header_len && tcp_connection->packet->length > 0) {
 		/* there's payload, so adjust buffer size */
-		mem = realloc(tcp_client->packet, header_len + ntohs(tcp_client->packet->length));
+		mem = realloc(tcp_connection->packet, header_len + ntohs(tcp_connection->packet->length));
 		if(!mem) {
 			fprintf(stderr, "out of memory when reading from TCP client\n");
 			return -1;
 		}
-		tcp_client->packet = (struct alfred_tlv *)mem;
+		tcp_connection->packet = (struct alfred_tlv *)mem;
 	}
 
-	if(tcp_client->read == header_len + ntohs(tcp_client->packet->length)) {
+	if(tcp_connection->read == header_len + ntohs(tcp_connection->packet->length)) {
 		/* packet is complete */
-		switch(tcp_client->packet->type) {
+		switch(tcp_connection->packet->type) {
 		case ALFRED_REQUEST:
-			process_alfred_request(globals, NULL, &tcp_client->address,
-					       (struct alfred_request_v0 *)tcp_client->packet,
-					       tcp_client->netsock);
+			process_alfred_request(globals, NULL, &tcp_connection->address,
+					       (struct alfred_request_v0 *)tcp_connection->packet,
+					       tcp_connection->netsock);
 			break;
 		case ALFRED_PUSH_DATA:
-			process_alfred_push_data(globals, &tcp_client->address,
-						 (struct alfred_push_data_v0 *)tcp_client->packet);
+			process_alfred_push_data(globals, &tcp_connection->address,
+						 (struct alfred_push_data_v0 *)tcp_connection->packet);
 
 			/* do not close connection, but expect more packets */
-			mem = realloc(tcp_client->packet, header_len);
+			mem = realloc(tcp_connection->packet, header_len);
 			if(!mem) {
 				fprintf(stderr, "out of memory when reading from TCP client\n");
 				return -1;
 			}
 			memset(mem, 0, header_len);
-			tcp_client->packet = (struct alfred_tlv *)mem;
-			tcp_client->read = 0;
+			tcp_connection->packet = (struct alfred_tlv *)mem;
+			tcp_connection->read = 0;
 			return 0;
 		case ALFRED_STATUS_TXEND:
-			process_alfred_status_txend(globals, &tcp_client->address,
-						    (struct alfred_status_v0 *)tcp_client->packet);
+			process_alfred_status_txend(globals, &tcp_connection->address,
+						    (struct alfred_status_v0 *)tcp_connection->packet);
 			break;
 		}
 		/* close connection */

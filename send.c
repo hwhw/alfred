@@ -255,7 +255,7 @@ ssize_t send_alfred_stream(struct interface *interface,
 {
 	ssize_t ret;
 	int sock;
-	struct tcp_client *tcp_client;
+	struct tcp_connection *tcp_connection;
 
 	sock = connect_tcp(interface, dest);
 	if (sock < 0)
@@ -272,19 +272,19 @@ ssize_t send_alfred_stream(struct interface *interface,
 	shutdown(sock, SHUT_WR);
 
 	/* put socket on the interface's tcp socket list for reading */
-	tcp_client = malloc(sizeof(*tcp_client));
-	if(!tcp_client) {
+	tcp_connection = malloc(sizeof(*tcp_connection));
+	if(!tcp_connection) {
 		goto tcp_drop;
 	}
-	tcp_client->packet = calloc(1, sizeof(struct alfred_tlv));
-	if(!tcp_client->packet) {
-		free(tcp_client);
+	tcp_connection->packet = calloc(1, sizeof(struct alfred_tlv));
+	if(!tcp_connection->packet) {
+		free(tcp_connection);
 		goto tcp_drop;
 	}
-	tcp_client->read = 0;
-	tcp_client->netsock = sock;
-	memcpy(&tcp_client->address, dest, sizeof(tcp_client->address));
-	list_add(&tcp_client->list, &interface->tcp_clients);
+	tcp_connection->read = 0;
+	tcp_connection->netsock = sock;
+	memcpy(&tcp_connection->address, dest, sizeof(tcp_connection->address));
+	list_add(&tcp_connection->list, &interface->tcp_connections);
 
 	return 0;
 

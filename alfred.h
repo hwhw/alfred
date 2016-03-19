@@ -102,7 +102,7 @@ enum clientmode {
 	CLIENT_CHANGE_INTERFACE,
 };
 
-struct tcp_client {
+struct tcp_connection {
 	int netsock;
 	struct in6_addr address;
 	struct alfred_tlv *packet;
@@ -120,7 +120,7 @@ struct interface {
 	int netsock_mcast;
 	int netsock_tcp;
 
-	struct list_head tcp_clients;
+	struct list_head tcp_connections;
 
 	struct hashtable_t *server_hash;
 
@@ -173,7 +173,7 @@ int alfred_client_change_interface(struct globals *globals);
 /* recv.c */
 int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		       int recv_sock);
-int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client);
+int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_connection);
 struct transaction_head *
 transaction_add(struct globals *globals, struct ether_addr mac, uint16_t id);
 struct transaction_head *
