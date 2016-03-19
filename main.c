@@ -58,6 +58,7 @@ static void alfred_usage(void)
 	printf("  -m, --master                        start up the daemon in master mode, which\n");
 	printf("                                      accepts data from slaves and syncs it with\n");
 	printf("                                      other masters\n");
+	printf("  -t, --tcp                           use TCP protocol for server-to-server communication\n");
 	printf("\n");
 	printf("  -u, --unix-path [path]              path to unix socket used for client-server\n");
 	printf("                                      communication (default: \""ALFRED_SOCK_PATH_DEFAULT"\")\n");
@@ -149,6 +150,7 @@ static struct globals *alfred_init(int argc, char *argv[])
 		{"request",		required_argument,	NULL,	'r'},
 		{"interface",		required_argument,	NULL,	'i'},
 		{"master",		no_argument,		NULL,	'm'},
+		{"tcp",			no_argument,		NULL,	't'},
 		{"help",		no_argument,		NULL,	'h'},
 		{"req-version",		required_argument,	NULL,	'V'},
 		{"modeswitch",		required_argument,	NULL,	'M'},
@@ -170,6 +172,7 @@ static struct globals *alfred_init(int argc, char *argv[])
 	INIT_LIST_HEAD(&globals->interfaces);
 	globals->change_interface = NULL;
 	globals->opmode = OPMODE_SLAVE;
+	globals->requestproto = REQPROTO_UDP;
 	globals->clientmode = CLIENT_NONE;
 	globals->best_server = NULL;
 	globals->clientmode_version = 0;
@@ -182,7 +185,7 @@ static struct globals *alfred_init(int argc, char *argv[])
 
 	time_random_seed();
 
-	while ((opt = getopt_long(argc, argv, "ms:r:hi:b:vV:M:I:u:dc:", long_options,
+	while ((opt = getopt_long(argc, argv, "mts:r:hi:b:vV:M:I:u:dc:", long_options,
 				  &opt_ind)) != -1) {
 		switch (opt) {
 		case 'r':
@@ -206,6 +209,9 @@ static struct globals *alfred_init(int argc, char *argv[])
 			break;
 		case 'm':
 			globals->opmode = OPMODE_MASTER;
+			break;
+		case 't':
+			globals->requestproto = REQPROTO_TCP;
 			break;
 		case 'i':
 			netsock_set_interfaces(globals, optarg);

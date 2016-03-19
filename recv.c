@@ -302,7 +302,8 @@ process_alfred_announce_master(struct globals *globals,
 static int process_alfred_request(struct globals *globals,
 				  struct interface *interface,
 				  struct in6_addr *source,
-				  struct alfred_request_v0 *request)
+				  struct alfred_request_v0 *request,
+				  int socket)
 {
 	int len;
 
@@ -315,7 +316,7 @@ static int process_alfred_request(struct globals *globals,
 		return -1;
 
 	push_data(globals, interface, source, SOURCE_SYNCED,
-		  request->requested_type, request->tx_id);
+		  request->requested_type, request->tx_id, socket);
 
 	return 0;
 }
@@ -432,7 +433,7 @@ int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		break;
 	case ALFRED_REQUEST:
 		process_alfred_request(globals, interface, &source.sin6_addr,
-				       (struct alfred_request_v0 *)packet);
+				       (struct alfred_request_v0 *)packet, -1);
 		break;
 	case ALFRED_STATUS_TXEND:
 		process_alfred_status_txend(globals, &source.sin6_addr,
@@ -440,6 +441,87 @@ int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		break;
 	default:
 		/* unknown packet type */
+		return -1;
+	}
+
+	return 0;
+}
+
+int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_connection)
+{
+	size_t to_read;
+	int res;
+	const size_t header_len = sizeof(struct alfred_tlv);
+	void *mem;
+
+	/* determine how many bytes we're still expecting */
+	if (tcp_connection->read < header_len) {
+		/* TLV header still incomplete */
+		to_read = header_len - tcp_connection->read;
+	} else {
+		/* payload still incomplete */
+		to_read = header_len
+			  + ntohs(tcp_connection->packet->length)
+			  - tcp_connection->read;
+	}
+
+	res = recv(tcp_connection->netsock,
+		(uint8_t*)tcp_connection->packet + tcp_connection->read,
+		to_read, MSG_DONTWAIT);
+
+	if (res < 0) {
+		return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+	} else if (res == 0) {
+		/* end of stream */
+		return -1;
+	}
+
+	tcp_connection->read += res;
+
+	if (tcp_connection->read == header_len
+	    && tcp_connection->packet->length > 0) {
+		/* there's payload, so adjust buffer size */
+		mem = realloc(tcp_connection->packet,
+			      header_len + ntohs(tcp_connection->packet->length));
+		if (!mem) {
+			fprintf(stderr, "out of memory when reading from TCP "
+					"client\n");
+			return -1;
+		}
+		tcp_connection->packet = (struct alfred_tlv *)mem;
+	}
+
+	if (tcp_connection->read ==
+	    header_len + ntohs(tcp_connection->packet->length)) {
+		/* packet is complete */
+		switch(tcp_connection->packet->type) {
+		case ALFRED_REQUEST:
+			process_alfred_request(globals, NULL,
+					       &tcp_connection->address,
+					       (struct alfred_request_v0 *)tcp_connection->packet,
+					       tcp_connection->netsock);
+			break;
+		case ALFRED_PUSH_DATA:
+			process_alfred_push_data(globals, &tcp_connection->address,
+						 (struct alfred_push_data_v0 *)tcp_connection->packet);
+
+			/* do not close connection, but expect more packets */
+			mem = realloc(tcp_connection->packet, header_len);
+			if (!mem) {
+				fprintf(stderr, "out of memory when reading "
+						"from TCP client\n");
+				return -1;
+			}
+			memset(mem, 0, header_len);
+			tcp_connection->packet = (struct alfred_tlv *)mem;
+			tcp_connection->read = 0;
+			return 0;
+		case ALFRED_STATUS_TXEND:
+			process_alfred_status_txend(globals, &tcp_connection->address,
+						    (struct alfred_status_v0 *)tcp_connection->packet);
+			break;
+		}
+		/* close connection */
 		return -1;
 	}
 

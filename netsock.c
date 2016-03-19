@@ -80,12 +80,23 @@ static int server_choose(void *d1, int size)
 void netsock_close_all(struct globals *globals)
 {
 	struct interface *interface, *is;
+	struct tcp_connection *tcp_connection, *tc;
 
 	list_for_each_entry_safe(interface, is, &globals->interfaces, list) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
+			shutdown(tcp_connection->netsock, SHUT_RDWR);
+			close(tcp_connection->netsock);
+			list_del(&tcp_connection->list);
+			free(tcp_connection->packet);
+			free(tcp_connection);
+		}
 		if (interface->netsock >= 0)
 			close(interface->netsock);
 		if (interface->netsock_mcast >= 0)
 			close(interface->netsock_mcast);
+		if (interface->netsock_tcp >= 0)
+			close(interface->netsock_tcp);
 		list_del(&interface->list);
 		hash_delete(interface->server_hash, free);
 		free(interface->interface);
@@ -147,6 +158,7 @@ int netsock_set_interfaces(struct globals *globals, char *interfaces)
 		interface->interface = NULL;
 		interface->netsock = -1;
 		interface->netsock_mcast = -1;
+		interface->netsock_tcp = -1;
 		interface->server_hash = NULL;
 
 		interface->interface = strdup(token);
@@ -164,6 +176,8 @@ int netsock_set_interfaces(struct globals *globals, char *interfaces)
 			netsock_close_all(globals);
 			return -ENOMEM;
 		}
+
+		INIT_LIST_HEAD(&interface->tcp_connections);
 
 		list_add(&interface->list, &globals->interfaces);
 	}
@@ -214,6 +228,7 @@ static int netsock_open(struct interface *interface)
 {
 	int sock;
 	int sock_mc;
+	int sock_tcp;
 	struct sockaddr_in6 sin6, sin6_mc;
 	struct ipv6_mreq mreq;
 	struct ifreq ifr;
@@ -221,6 +236,7 @@ static int netsock_open(struct interface *interface)
 
 	interface->netsock = -1;
 	interface->netsock_mcast = -1;
+	interface->netsock_tcp = -1;
 
 	sock = socket(PF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock  < 0) {
@@ -231,6 +247,14 @@ static int netsock_open(struct interface *interface)
 	sock_mc = socket(PF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (sock_mc  < 0) {
 		close(sock);
+		perror("can't open socket");
+		return -1;
+	}
+
+	sock_tcp = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	if (sock_tcp < 0) {
+		close(sock);
+		close(sock_mc);
 		perror("can't open socket");
 		return -1;
 	}
@@ -286,6 +310,16 @@ static int netsock_open(struct interface *interface)
 		goto err;
 	}
 
+	if (bind(sock_tcp, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
+		perror("can't bind");
+		goto err;
+	}
+
+	if (listen(sock_tcp, 10) < 0) {
+		perror("can't listen on tcp socket");
+		goto err;
+	}
+
 	if (bind(sock_mc, (struct sockaddr *)&sin6_mc, sizeof(sin6_mc)) < 0) {
 		perror("can't bind");
 		goto err;
@@ -327,11 +361,13 @@ static int netsock_open(struct interface *interface)
 
 	interface->netsock = sock;
 	interface->netsock_mcast = sock_mc;
+	interface->netsock_tcp = sock_tcp;
 
 	return 0;
 err:
 	close(sock);
 	close(sock_mc);
+	close(sock_tcp);
 	return -1;
 }
 
@@ -363,6 +399,7 @@ void netsock_reopen(struct globals *globals)
 int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 {
 	struct interface *interface;
+	struct tcp_connection *tcp_connection;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		if (interface->netsock >= 0) {
@@ -376,6 +413,19 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 			if (maxsock < interface->netsock_mcast)
 				maxsock = interface->netsock_mcast;
 		}
+
+		if (interface->netsock_tcp >= 0) {
+			FD_SET(interface->netsock_tcp, fds);
+			if (maxsock < interface->netsock_tcp)
+				maxsock = interface->netsock_tcp;
+		}
+
+		list_for_each_entry(tcp_connection,
+				    &interface->tcp_connections, list) {
+			FD_SET(tcp_connection->netsock, fds);
+			if (maxsock < tcp_connection->netsock)
+				maxsock = tcp_connection->netsock;
+		}
 	}
 
 	return maxsock;
@@ -384,12 +434,26 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 void netsock_check_error(struct globals *globals, fd_set *errfds)
 {
 	struct interface *interface;
+	struct tcp_connection *tcp_connection, *tc;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
+			if (FD_ISSET(tcp_connection->netsock, errfds)) {
+				shutdown(tcp_connection->netsock, SHUT_RDWR);
+				close(tcp_connection->netsock);
+				list_del(&tcp_connection->list);
+				free(tcp_connection->packet);
+				free(tcp_connection);
+			}
+		}
+
 		if ((interface->netsock < 0 ||
 		     !FD_ISSET(interface->netsock, errfds)) &&
 		    (interface->netsock_mcast < 0 ||
-		     !FD_ISSET(interface->netsock_mcast, errfds)))
+		     !FD_ISSET(interface->netsock_mcast, errfds)) &&
+		    (interface->netsock_tcp < 0 ||
+		     !FD_ISSET(interface->netsock_tcp, errfds)))
 			continue;
 
 		fprintf(stderr, "Error on netsock detected\n");
@@ -400,15 +464,23 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 		if (interface->netsock_mcast >= 0)
 			close(interface->netsock_mcast);
 
+		if (interface->netsock_tcp >= 0)
+			close(interface->netsock_tcp);
+
 		interface->netsock = -1;
 		interface->netsock_mcast = -1;
+		interface->netsock_tcp = -1;
 	}
 }
 
 int netsock_receive_packet(struct globals *globals, fd_set *fds)
 {
 	struct interface *interface;
+	struct tcp_connection *tcp_connection, *tc;
+	struct sockaddr_in6 sin6;
+	socklen_t sin6_len = sizeof(sin6);
 	int recvs = 0;
+	int sock_client;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		if (interface->netsock >= 0 &&
@@ -422,6 +494,80 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 		    FD_ISSET(interface->netsock_mcast, fds)) {
 			recv_alfred_packet(globals, interface,
 					   interface->netsock_mcast);
+			recvs++;
+		}
+
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
+			if (FD_ISSET(tcp_connection->netsock, fds)) {
+				if (recv_alfred_stream(globals,
+						       tcp_connection)) {
+					/* upon error, close and free TCP
+					 * connection
+					 */
+					shutdown(tcp_connection->netsock,
+						 SHUT_RDWR);
+					close(tcp_connection->netsock);
+					list_del(&tcp_connection->list);
+					free(tcp_connection->packet);
+					free(tcp_connection);
+				}
+				recvs++;
+			}
+		}
+
+		if (interface->netsock_tcp >= 0 &&
+		    FD_ISSET(interface->netsock_tcp, fds)) {
+			sock_client = accept(interface->netsock_tcp,
+					     (struct sockaddr *)&sin6,
+					     &sin6_len);
+			if (sock_client < 0) {
+				perror("can't accept TCP connection");
+				goto tcp_done;
+			}
+
+			/* drop packets not sent over link-local ipv6 */
+			if (!is_ipv6_eui64(&sin6.sin6_addr)) {
+				fprintf(stderr, "not handling TCP connection "
+						"from non-link-local address"
+						"\n");
+				goto tcp_drop;
+			}
+
+			/* drop packets from ourselves */
+			if (netsock_own_address(globals, &sin6.sin6_addr)) {
+				fprintf(stderr, "not handling TCP connection "
+						"from ourselves\n");
+				goto tcp_drop;
+			}
+
+			tcp_connection = malloc(sizeof(*tcp_connection));
+			if (!tcp_connection) {
+				fprintf(stderr, "out of memory, cannot handle "
+						"TCP client connection\n");
+				goto tcp_drop;
+			}
+
+			tcp_connection->packet =
+				calloc(1, sizeof(struct alfred_tlv));
+			if (!tcp_connection->packet) {
+				fprintf(stderr, "out of memory, cannot handle "
+						"TCP client connection\n");
+				free(tcp_connection);
+				goto tcp_drop;
+			}
+
+			tcp_connection->read = 0;
+			tcp_connection->netsock = sock_client;
+			memcpy(&tcp_connection->address, &sin6.sin6_addr,
+			       sizeof(tcp_connection->address));
+			list_add(&tcp_connection->list,
+				 &interface->tcp_connections);
+			goto tcp_done;
+tcp_drop:
+			shutdown(sock_client, SHUT_RDWR);
+			close(sock_client);
+tcp_done:
 			recvs++;
 		}
 	}

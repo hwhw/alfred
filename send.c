@@ -27,10 +27,35 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "alfred.h"
 #include "hash.h"
 #include "packet.h"
 #include "list.h"
+
+int connect_tcp(struct interface *interface, const struct in6_addr *dest)
+{
+	struct sockaddr_in6 dest_addr;
+	int sock;
+
+	memset(&dest_addr, 0, sizeof(dest_addr));
+	dest_addr.sin6_family = AF_INET6;
+	dest_addr.sin6_port = htons(ALFRED_PORT);
+	dest_addr.sin6_scope_id = interface->scope_id;
+	memcpy(&dest_addr.sin6_addr, dest, sizeof(*dest));
+
+	sock = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	if (sock < 0)
+		return -1;
+
+	if (connect(sock, (struct sockaddr *)&dest_addr,
+		    sizeof(struct sockaddr_in6)) < 0) {
+		close(sock);
+		return -1;
+	}
+
+	return sock;
+}
 
 int announce_master(struct globals *globals)
 {
@@ -51,7 +76,7 @@ int announce_master(struct globals *globals)
 
 int push_data(struct globals *globals, struct interface *interface,
 	      struct in6_addr *destination, enum data_source max_source_level,
-	      int type_filter, uint16_t tx_id)
+	      int type_filter, uint16_t tx_id, int socket)
 {
 	struct hash_it_t *hashit = NULL;
 	uint8_t buf[MAX_PAYLOAD];
@@ -90,8 +115,14 @@ int push_data(struct globals *globals, struct interface *interface,
 			tlv_length += sizeof(*push) - sizeof(push->header);
 			push->header.length = htons(tlv_length);
 			push->tx.seqno = htons(seqno++);
-			send_alfred_packet(interface, destination, push,
-					   sizeof(*push) + total_length);
+			if (socket < 0) {
+				send_alfred_packet(interface, destination, push,
+						   sizeof(*push)
+						   + total_length);
+			} else {
+				send(socket, push, sizeof(*push) + total_length,
+				     MSG_NOSIGNAL);
+			}
 			total_length = 0;
 		}
 
@@ -114,8 +145,13 @@ int push_data(struct globals *globals, struct interface *interface,
 		tlv_length += sizeof(*push) - sizeof(push->header);
 		push->header.length = htons(tlv_length);
 		push->tx.seqno = htons(seqno++);
-		send_alfred_packet(interface, destination, push,
-				   sizeof(*push) + total_length);
+		if (socket < 0) {
+			send_alfred_packet(interface, destination, push,
+					   sizeof(*push) + total_length);
+		} else {
+			send(socket, push, sizeof(*push) + total_length,
+			     MSG_NOSIGNAL);
+		}
 	}
 
 	/* send transaction txend packet */
@@ -128,8 +164,13 @@ int push_data(struct globals *globals, struct interface *interface,
 		status_end.tx.id = tx_id;
 		status_end.tx.seqno = htons(seqno);
 
-		send_alfred_packet(interface, destination, &status_end,
-				   sizeof(status_end));
+		if (socket < 0) {
+			send_alfred_packet(interface, destination, &status_end,
+					   sizeof(status_end));
+		} else {
+			send(socket, &status_end, sizeof(status_end),
+			     MSG_NOSIGNAL);
+		}
 	}
 
 	return 0;
@@ -139,6 +180,7 @@ int sync_data(struct globals *globals)
 {
 	struct hash_it_t *hashit = NULL;
 	struct interface *interface;
+	int sock;
 
 	/* send local data and data from our clients to (all) other servers */
 	list_for_each_entry(interface, &globals->interfaces, list) {
@@ -146,9 +188,20 @@ int sync_data(struct globals *globals)
 						      hashit))) {
 			struct server *server = hashit->bucket->data;
 
-			push_data(globals, interface, &server->address,
-				  SOURCE_FIRST_HAND, NO_FILTER,
-				  get_random_id());
+			if (globals->requestproto == REQPROTO_TCP) {
+				sock = connect_tcp(interface, &server->address);
+				if (sock < 0)
+					continue;
+				push_data(globals, interface, &server->address,
+					  SOURCE_FIRST_HAND, NO_FILTER,
+					  get_random_id(), sock);
+				shutdown(sock, SHUT_RDWR);
+				close(sock);
+			} else {
+				push_data(globals, interface, &server->address,
+					  SOURCE_FIRST_HAND, NO_FILTER,
+					  get_random_id(), -1);
+			}
 		}
 	}
 	return 0;
@@ -164,7 +217,7 @@ int push_local_data(struct globals *globals)
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		push_data(globals, interface, &globals->best_server->address,
-			  SOURCE_LOCAL, NO_FILTER, get_random_id());
+			  SOURCE_LOCAL, NO_FILTER, get_random_id(), -1);
 	}
 
 	return 0;
@@ -197,4 +250,48 @@ ssize_t send_alfred_packet(struct interface *interface,
 	}
 
 	return ret;
+}
+
+ssize_t send_alfred_stream(struct interface *interface,
+			   const struct in6_addr *dest, void *buf, int length)
+{
+	ssize_t ret;
+	int sock;
+	struct tcp_connection *tcp_connection;
+
+	sock = connect_tcp(interface, dest);
+	if (sock < 0)
+		return -1;
+
+	ret = send(sock, buf, length, MSG_NOSIGNAL);
+	if (ret < 0) {
+		shutdown(sock, SHUT_RDWR);
+		close(sock);
+		return -1;
+	}
+
+	/* close socket for writing */
+	shutdown(sock, SHUT_WR);
+
+	/* put socket on the interface's tcp socket list for reading */
+	tcp_connection = malloc(sizeof(*tcp_connection));
+	if (!tcp_connection) {
+		goto tcp_drop;
+	}
+	tcp_connection->packet = calloc(1, sizeof(struct alfred_tlv));
+	if (!tcp_connection->packet) {
+		free(tcp_connection);
+		goto tcp_drop;
+	}
+	tcp_connection->read = 0;
+	tcp_connection->netsock = sock;
+	memcpy(&tcp_connection->address, dest, sizeof(tcp_connection->address));
+	list_add(&tcp_connection->list, &interface->tcp_connections);
+
+	return 0;
+
+tcp_drop:
+	shutdown(sock, SHUT_RDWR);
+	close(sock);
+	return -1;
 }

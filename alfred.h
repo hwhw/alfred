@@ -89,12 +89,26 @@ enum opmode {
 	OPMODE_MASTER,
 };
 
+enum requestproto {
+	REQPROTO_UDP,
+	REQPROTO_TCP
+};
+
 enum clientmode {
 	CLIENT_NONE,
 	CLIENT_REQUEST_DATA,
 	CLIENT_SET_DATA,
 	CLIENT_MODESWITCH,
 	CLIENT_CHANGE_INTERFACE,
+};
+
+struct tcp_connection {
+	int netsock;
+	struct in6_addr address;
+	struct alfred_tlv *packet;
+	uint16_t read;
+
+	struct list_head list;
 };
 
 struct interface {
@@ -104,6 +118,9 @@ struct interface {
 	char *interface;
 	int netsock;
 	int netsock_mcast;
+	int netsock_tcp;
+
+	struct list_head tcp_connections;
 
 	struct hashtable_t *server_hash;
 
@@ -117,6 +134,7 @@ struct globals {
 	struct server *best_server;	/* NULL if we are a server ourselves */
 	const char *mesh_iface;
 	enum opmode opmode;
+	enum requestproto requestproto;
 	enum clientmode clientmode;
 	int clientmode_arg;
 	int clientmode_version;
@@ -155,6 +173,8 @@ int alfred_client_change_interface(struct globals *globals);
 /* recv.c */
 int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		       int recv_sock);
+int recv_alfred_stream(struct globals *globals,
+		       struct tcp_connection *tcp_connection);
 struct transaction_head *
 transaction_add(struct globals *globals, struct ether_addr mac, uint16_t id);
 struct transaction_head *
@@ -165,11 +185,13 @@ struct transaction_head *transaction_clean(struct globals *globals,
 /* send.c */
 int push_data(struct globals *globals, struct interface *interface,
 	      struct in6_addr *destination, enum data_source max_source_level,
-	      int type_filter, uint16_t tx_id);
+	      int type_filter, uint16_t tx_id, int socket);
 int announce_master(struct globals *globals);
 int push_local_data(struct globals *globals);
 int sync_data(struct globals *globals);
 ssize_t send_alfred_packet(struct interface *interface,
+			   const struct in6_addr *dest, void *buf, int length);
+ssize_t send_alfred_stream(struct interface *interface,
 			   const struct in6_addr *dest, void *buf, int length);
 /* unix_sock.c */
 int unix_sock_read(struct globals *globals);
