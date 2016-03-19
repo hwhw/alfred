@@ -258,7 +258,7 @@ ssize_t send_alfred_stream(struct interface *interface,
 	}
 	tcp_client->read = 0;
 	tcp_client->netsock = sock;
-	memcpy(&tcp_client->address, &dest, sizeof(tcp_client->address));
+	memcpy(&tcp_client->address, dest, sizeof(tcp_client->address));
 	list_add(&tcp_client->list, &interface->tcp_clients);
 
 	return 0;
