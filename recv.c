@@ -455,42 +455,49 @@ int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_conne
 	void *mem;
 
 	/* determine how many bytes we're still expecting */
-	if(tcp_connection->read < header_len) {
+	if (tcp_connection->read < header_len) {
 		/* TLV header still incomplete */
 		to_read = header_len - tcp_connection->read;
 	} else {
 		/* payload still incomplete */
-		to_read = header_len + ntohs(tcp_connection->packet->length) - tcp_connection->read;
+		to_read = header_len
+			  + ntohs(tcp_connection->packet->length)
+			  - tcp_connection->read;
 	}
 
 	res = recv(tcp_connection->netsock,
 		(uint8_t*)tcp_connection->packet + tcp_connection->read,
 		to_read, MSG_DONTWAIT);
 
-	if(res < 0) {
+	if (res < 0) {
 		return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
-	} else if(res == 0) {
+	} else if (res == 0) {
 		/* end of stream */
 		return -1;
 	}
 
 	tcp_connection->read += res;
 
-	if(tcp_connection->read == header_len && tcp_connection->packet->length > 0) {
+	if (tcp_connection->read == header_len
+	    && tcp_connection->packet->length > 0) {
 		/* there's payload, so adjust buffer size */
-		mem = realloc(tcp_connection->packet, header_len + ntohs(tcp_connection->packet->length));
-		if(!mem) {
-			fprintf(stderr, "out of memory when reading from TCP client\n");
+		mem = realloc(tcp_connection->packet,
+			      header_len + ntohs(tcp_connection->packet->length));
+		if (!mem) {
+			fprintf(stderr, "out of memory when reading from TCP "
+					"client\n");
 			return -1;
 		}
 		tcp_connection->packet = (struct alfred_tlv *)mem;
 	}
 
-	if(tcp_connection->read == header_len + ntohs(tcp_connection->packet->length)) {
+	if (tcp_connection->read == 
+	    header_len + ntohs(tcp_connection->packet->length)) {
 		/* packet is complete */
 		switch(tcp_connection->packet->type) {
 		case ALFRED_REQUEST:
-			process_alfred_request(globals, NULL, &tcp_connection->address,
+			process_alfred_request(globals, NULL,
+					       &tcp_connection->address,
 					       (struct alfred_request_v0 *)tcp_connection->packet,
 					       tcp_connection->netsock);
 			break;
@@ -500,8 +507,9 @@ int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_conne
 
 			/* do not close connection, but expect more packets */
 			mem = realloc(tcp_connection->packet, header_len);
-			if(!mem) {
-				fprintf(stderr, "out of memory when reading from TCP client\n");
+			if (!mem) {
+				fprintf(stderr, "out of memory when reading "
+						"from TCP client\n");
 				return -1;
 			}
 			memset(mem, 0, header_len);

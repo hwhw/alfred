@@ -173,7 +173,8 @@ int alfred_client_change_interface(struct globals *globals);
 /* recv.c */
 int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		       int recv_sock);
-int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_connection);
+int recv_alfred_stream(struct globals *globals,
+		       struct tcp_connection *tcp_connection);
 struct transaction_head *
 transaction_add(struct globals *globals, struct ether_addr mac, uint16_t id);
 struct transaction_head *

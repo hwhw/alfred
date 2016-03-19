@@ -48,7 +48,8 @@ int connect_tcp(struct interface *interface, const struct in6_addr *dest)
 	if (sock < 0)
 		return -1;
 	
-	if (connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6)) < 0) {
+	if (connect(sock, (struct sockaddr *)&dest_addr,
+		    sizeof(struct sockaddr_in6)) < 0) {
 		close(sock);
 		return -1;
 	}
@@ -116,7 +117,8 @@ int push_data(struct globals *globals, struct interface *interface,
 			push->tx.seqno = htons(seqno++);
 			if (socket < 0) {
 				send_alfred_packet(interface, destination, push,
-						   sizeof(*push) + total_length);
+						   sizeof(*push)
+						   + total_length);
 			} else {
 				send(socket, push, sizeof(*push) + total_length,
 				     MSG_NOSIGNAL);
@@ -188,7 +190,7 @@ int sync_data(struct globals *globals)
 
 			if (globals->requestproto == REQPROTO_TCP) {
 				sock = connect_tcp(interface, &server->address);
-				if(sock < 0)
+				if (sock < 0)
 					continue;
 				push_data(globals, interface, &server->address,
 					  SOURCE_FIRST_HAND, NO_FILTER,
@@ -273,11 +275,11 @@ ssize_t send_alfred_stream(struct interface *interface,
 
 	/* put socket on the interface's tcp socket list for reading */
 	tcp_connection = malloc(sizeof(*tcp_connection));
-	if(!tcp_connection) {
+	if (!tcp_connection) {
 		goto tcp_drop;
 	}
 	tcp_connection->packet = calloc(1, sizeof(struct alfred_tlv));
-	if(!tcp_connection->packet) {
+	if (!tcp_connection->packet) {
 		free(tcp_connection);
 		goto tcp_drop;
 	}

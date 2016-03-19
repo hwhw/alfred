@@ -262,7 +262,8 @@ static void check_if_socket(struct interface *interface)
 	return;
 
 close:
-	list_for_each_entry_safe(tcp_connection, tc, &interface->tcp_connections, list) {
+	list_for_each_entry_safe(tcp_connection, tc,
+			         &interface->tcp_connections, list) {
 		shutdown(tcp_connection->netsock, SHUT_RDWR);
 		close(tcp_connection->netsock);
 		list_del(&tcp_connection->list);

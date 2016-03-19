@@ -83,7 +83,8 @@ void netsock_close_all(struct globals *globals)
 	struct tcp_connection *tcp_connection, *tc;
 
 	list_for_each_entry_safe(interface, is, &globals->interfaces, list) {
-		list_for_each_entry_safe(tcp_connection, tc, &interface->tcp_connections, list) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
 			shutdown(tcp_connection->netsock, SHUT_RDWR);
 			close(tcp_connection->netsock);
 			list_del(&tcp_connection->list);
@@ -419,7 +420,8 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 				maxsock = interface->netsock_tcp;
 		}
 
-		list_for_each_entry(tcp_connection, &interface->tcp_connections, list) {
+		list_for_each_entry(tcp_connection,
+				    &interface->tcp_connections, list) {
 			FD_SET(tcp_connection->netsock, fds);
 			if (maxsock < tcp_connection->netsock)
 				maxsock = tcp_connection->netsock;
@@ -435,8 +437,9 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 	struct tcp_connection *tcp_connection, *tc;
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
-		list_for_each_entry_safe(tcp_connection, tc, &interface->tcp_connections, list) {
-			if(FD_ISSET(tcp_connection->netsock, errfds)) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
+			if (FD_ISSET(tcp_connection->netsock, errfds)) {
 				shutdown(tcp_connection->netsock, SHUT_RDWR);
 				close(tcp_connection->netsock);
 				list_del(&tcp_connection->list);
@@ -494,11 +497,16 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 			recvs++;
 		}
 
-		list_for_each_entry_safe(tcp_connection, tc, &interface->tcp_connections, list) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
 			if (FD_ISSET(tcp_connection->netsock, fds)) {
-				if(recv_alfred_stream(globals, tcp_connection)) {
-					/* upon error, close and free TCP connection */
-					shutdown(tcp_connection->netsock, SHUT_RDWR);
+				if (recv_alfred_stream(globals,
+						       tcp_connection)) {
+					/* upon error, close and free TCP
+					 * connection
+					 */
+					shutdown(tcp_connection->netsock,
+						 SHUT_RDWR);
 					close(tcp_connection->netsock);
 					list_del(&tcp_connection->list);
 					free(tcp_connection->packet);
@@ -509,42 +517,52 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 		}
 
 		if (interface->netsock_tcp >= 0 &&
-			FD_ISSET(interface->netsock_tcp, fds)) {
-			sock_client = accept(interface->netsock_tcp, (struct sockaddr *)&sin6, &sin6_len);
-			if(sock_client < 0) {
+		    FD_ISSET(interface->netsock_tcp, fds)) {
+			sock_client = accept(interface->netsock_tcp,
+					     (struct sockaddr *)&sin6,
+					     &sin6_len);
+			if (sock_client < 0) {
 				perror("can't accept TCP connection");
 				goto tcp_done;
 			}
 
-			// TODO: this check can probably be omitted.
 			/* drop packets not sent over link-local ipv6 */
 			if (!is_ipv6_eui64(&sin6.sin6_addr)) {
-				fprintf(stderr, "not handling TCP connection from non-link-local address\n");
+				fprintf(stderr, "not handling TCP connection "
+						"from non-link-local address"
+						"\n");
 				goto tcp_drop;
 			}
 
-			// TODO: this check can probably be omitted.
 			/* drop packets from ourselves */
 			if (netsock_own_address(globals, &sin6.sin6_addr)) {
-				fprintf(stderr, "not handling TCP connection from ourselves\n");
+				fprintf(stderr, "not handling TCP connection "
+						"from ourselves\n");
 				goto tcp_drop;
 			}
 
 			tcp_connection = malloc(sizeof(*tcp_connection));
-			if(!tcp_connection) {
-				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
+			if (!tcp_connection) {
+				fprintf(stderr, "out of memory, cannot handle "
+						"TCP client connection\n");
 				goto tcp_drop;
 			}
-			tcp_connection->packet = calloc(1, sizeof(struct alfred_tlv));
-			if(!tcp_connection->packet) {
-				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
+
+			tcp_connection->packet =
+				calloc(1, sizeof(struct alfred_tlv));
+			if (!tcp_connection->packet) {
+				fprintf(stderr, "out of memory, cannot handle "
+						"TCP client connection\n");
 				free(tcp_connection);
 				goto tcp_drop;
 			}
+
 			tcp_connection->read = 0;
 			tcp_connection->netsock = sock_client;
-			memcpy(&tcp_connection->address, &sin6.sin6_addr, sizeof(tcp_connection->address));
-			list_add(&tcp_connection->list, &interface->tcp_connections);
+			memcpy(&tcp_connection->address, &sin6.sin6_addr,
+			       sizeof(tcp_connection->address));
+			list_add(&tcp_connection->list,
+				 &interface->tcp_connections);
 			goto tcp_done;
 tcp_drop:
 			shutdown(sock_client, SHUT_RDWR);
