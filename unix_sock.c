@@ -251,6 +251,14 @@ static int unix_sock_req_data(struct globals *globals,
 	head->client_socket = client_sock;
 	head->requested_type = request->requested_type;
 
+	if (globals->requestproto == REQPROTO_TCP) {
+		if (!send_alfred_stream(interface,
+					&globals->best_server->address,
+					request, sizeof(*request)))
+			return 0;
+	}
+
+	/* default and fallback case: UDP */
 	send_alfred_packet(interface, &globals->best_server->address,
 			   request, sizeof(*request));
 

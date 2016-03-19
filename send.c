@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "alfred.h"
 #include "hash.h"
 #include "packet.h"
@@ -197,4 +198,58 @@ ssize_t send_alfred_packet(struct interface *interface,
 	}
 
 	return ret;
+}
+
+ssize_t send_alfred_stream(struct interface *interface,
+			   const struct in6_addr *dest, void *buf, int length)
+{
+	ssize_t ret;
+	int sock;
+	struct sockaddr_in6 dest_addr;
+	struct tcp_client *tcp_client;
+
+	memset(&dest_addr, 0, sizeof(dest_addr));
+	dest_addr.sin6_family = AF_INET6;
+	dest_addr.sin6_port = htons(ALFRED_PORT);
+	dest_addr.sin6_scope_id = interface->scope_id;
+	memcpy(&dest_addr.sin6_addr, dest, sizeof(*dest));
+
+	sock = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	if (sock < 0)
+		return -1;
+	
+	if (connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6)) < 0)
+		return -1;
+
+	ret = send(sock, buf, length, MSG_NOSIGNAL);
+	if (ret < 0) {
+		shutdown(sock, SHUT_RDWR);
+		close(sock);
+		return -1;
+	}
+
+	/* close socket for writing */
+	shutdown(sock, SHUT_WR);
+
+	/* put socket on the interface's tcp socket list for reading */
+	tcp_client = malloc(sizeof(*tcp_client));
+	if(!tcp_client) {
+		goto tcp_drop;
+	}
+	tcp_client->packet = malloc(sizeof(struct alfred_tlv));
+	if(!tcp_client->packet) {
+		free(tcp_client);
+		goto tcp_drop;
+	}
+	tcp_client->read = 0;
+	tcp_client->netsock = sock;
+	memcpy(&tcp_client->address, &dest_addr, sizeof(dest_addr));
+	list_add(&tcp_client->list, &interface->tcp_clients);
+
+	return 0;
+
+tcp_drop:
+	shutdown(sock, SHUT_RDWR);
+	close(sock);
+	return -1;
 }
