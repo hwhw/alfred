@@ -47,7 +47,7 @@ int connect_tcp(struct interface *interface, const struct in6_addr *dest)
 	sock = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	if (sock < 0)
 		return -1;
-	
+
 	if (connect(sock, (struct sockaddr *)&dest_addr,
 		    sizeof(struct sockaddr_in6)) < 0) {
 		close(sock);

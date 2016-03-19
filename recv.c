@@ -491,7 +491,7 @@ int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_conne
 		tcp_connection->packet = (struct alfred_tlv *)mem;
 	}
 
-	if (tcp_connection->read == 
+	if (tcp_connection->read ==
 	    header_len + ntohs(tcp_connection->packet->length)) {
 		/* packet is complete */
 		switch(tcp_connection->packet->type) {
