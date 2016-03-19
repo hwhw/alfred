@@ -190,6 +190,8 @@ int push_local_data(struct globals *globals);
 int sync_data(struct globals *globals);
 ssize_t send_alfred_packet(struct interface *interface,
 			   const struct in6_addr *dest, void *buf, int length);
+ssize_t send_alfred_stream(struct interface *interface,
+			   const struct in6_addr *dest, void *buf, int length);
 /* unix_sock.c */
 int unix_sock_read(struct globals *globals);
 int unix_sock_open_daemon(struct globals *globals);
