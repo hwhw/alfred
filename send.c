@@ -52,7 +52,7 @@ int announce_master(struct globals *globals)
 
 int push_data(struct globals *globals, struct interface *interface,
 	      struct in6_addr *destination, enum data_source max_source_level,
-	      int type_filter, uint16_t tx_id)
+	      int type_filter, uint16_t tx_id, int socket)
 {
 	struct hash_it_t *hashit = NULL;
 	uint8_t buf[MAX_PAYLOAD];
@@ -91,8 +91,13 @@ int push_data(struct globals *globals, struct interface *interface,
 			tlv_length += sizeof(*push) - sizeof(push->header);
 			push->header.length = htons(tlv_length);
 			push->tx.seqno = htons(seqno++);
-			send_alfred_packet(interface, destination, push,
-					   sizeof(*push) + total_length);
+			if (socket < 0) {
+				send_alfred_packet(interface, destination, push,
+						   sizeof(*push) + total_length);
+			} else {
+				send(socket, push, sizeof(*push) + total_length,
+				     MSG_NOSIGNAL);
+			}
 			total_length = 0;
 		}
 
@@ -115,8 +120,13 @@ int push_data(struct globals *globals, struct interface *interface,
 		tlv_length += sizeof(*push) - sizeof(push->header);
 		push->header.length = htons(tlv_length);
 		push->tx.seqno = htons(seqno++);
-		send_alfred_packet(interface, destination, push,
-				   sizeof(*push) + total_length);
+		if (socket < 0) {
+			send_alfred_packet(interface, destination, push,
+					   sizeof(*push) + total_length);
+		} else {
+			send(socket, push, sizeof(*push) + total_length,
+			     MSG_NOSIGNAL);
+		}
 	}
 
 	/* send transaction txend packet */
@@ -129,8 +139,13 @@ int push_data(struct globals *globals, struct interface *interface,
 		status_end.tx.id = tx_id;
 		status_end.tx.seqno = htons(seqno);
 
-		send_alfred_packet(interface, destination, &status_end,
-				   sizeof(status_end));
+		if (socket < 0) {
+			send_alfred_packet(interface, destination, &status_end,
+					   sizeof(status_end));
+		} else {
+			send(socket, &status_end, sizeof(status_end),
+			     MSG_NOSIGNAL);
+		}
 	}
 
 	return 0;
@@ -149,7 +164,7 @@ int sync_data(struct globals *globals)
 
 			push_data(globals, interface, &server->address,
 				  SOURCE_FIRST_HAND, NO_FILTER,
-				  get_random_id());
+				  get_random_id(), -1);
 		}
 	}
 	return 0;
@@ -165,7 +180,7 @@ int push_local_data(struct globals *globals)
 
 	list_for_each_entry(interface, &globals->interfaces, list) {
 		push_data(globals, interface, &globals->best_server->address,
-			  SOURCE_LOCAL, NO_FILTER, get_random_id());
+			  SOURCE_LOCAL, NO_FILTER, get_random_id(), -1);
 	}
 
 	return 0;
@@ -243,7 +258,7 @@ ssize_t send_alfred_stream(struct interface *interface,
 	}
 	tcp_client->read = 0;
 	tcp_client->netsock = sock;
-	memcpy(&tcp_client->address, &dest_addr, sizeof(dest_addr));
+	memcpy(&tcp_client->address, &dest, sizeof(tcp_client->address));
 	list_add(&tcp_client->list, &interface->tcp_clients);
 
 	return 0;

@@ -302,7 +302,8 @@ process_alfred_announce_master(struct globals *globals,
 static int process_alfred_request(struct globals *globals,
 				  struct interface *interface,
 				  struct in6_addr *source,
-				  struct alfred_request_v0 *request)
+				  struct alfred_request_v0 *request,
+				  int socket)
 {
 	int len;
 
@@ -315,7 +316,7 @@ static int process_alfred_request(struct globals *globals,
 		return -1;
 
 	push_data(globals, interface, source, SOURCE_SYNCED,
-		  request->requested_type, request->tx_id);
+		  request->requested_type, request->tx_id, socket);
 
 	return 0;
 }
@@ -432,7 +433,7 @@ int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		break;
 	case ALFRED_REQUEST:
 		process_alfred_request(globals, interface, &source.sin6_addr,
-				       (struct alfred_request_v0 *)packet);
+				       (struct alfred_request_v0 *)packet, -1);
 		break;
 	case ALFRED_STATUS_TXEND:
 		process_alfred_status_txend(globals, &source.sin6_addr,
@@ -459,7 +460,7 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 		to_read = header_len - tcp_client->read;
 	} else {
 		/* payload still incomplete */
-		to_read = header_len + tcp_client->packet->length - tcp_client->read;
+		to_read = header_len + ntohs(tcp_client->packet->length) - tcp_client->read;
 	}
 
 	res = recv(tcp_client->netsock,
@@ -478,7 +479,7 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 	if(tcp_client->read == header_len) {
 		if(tcp_client->packet->length > 0) {
 			/* there's payload, so adjust buffer size */
-			mem = realloc(tcp_client->packet, header_len + tcp_client->packet->length);
+			mem = realloc(tcp_client->packet, header_len + ntohs(tcp_client->packet->length));
 			if(!mem) {
 				fprintf(stderr, "out of memory when reading from TCP client\n");
 				return -1;
@@ -492,11 +493,13 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 
 		/* close connection */
 		return -1;
-	} else if(tcp_client->read == header_len + tcp_client->packet->length) {
+	} else if(tcp_client->read == header_len + ntohs(tcp_client->packet->length)) {
 		/* with payload: handle packet */
 		switch(tcp_client->packet->type) {
 		case ALFRED_REQUEST:
-			// TODO
+			process_alfred_request(globals, NULL, NULL,
+					       (struct alfred_request_v0 *)tcp_client->packet,
+					       tcp_client->netsock);
 			break;
 		case ALFRED_PUSH_DATA:
 			// TODO
