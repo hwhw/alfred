@@ -89,6 +89,11 @@ enum opmode {
 	OPMODE_MASTER,
 };
 
+enum requestproto {
+	REQPROTO_UDP,
+	REQPROTO_TCP
+};
+
 enum clientmode {
 	CLIENT_NONE,
 	CLIENT_REQUEST_DATA,
@@ -129,6 +134,7 @@ struct globals {
 	struct server *best_server;	/* NULL if we are a server ourselves */
 	const char *mesh_iface;
 	enum opmode opmode;
+	enum requestproto requestproto;
 	enum clientmode clientmode;
 	int clientmode_arg;
 	int clientmode_version;
