@@ -504,6 +504,7 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 				fprintf(stderr, "out of memory when reading from TCP client\n");
 				return -1;
 			}
+			memset(mem, 0, header_len);
 			tcp_client->packet = (struct alfred_tlv *)mem;
 			tcp_client->read = 0;
 			return 0;
