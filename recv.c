@@ -476,25 +476,18 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 
 	tcp_client->read += res;
 
-	if(tcp_client->read == header_len) {
-		if(tcp_client->packet->length > 0) {
-			/* there's payload, so adjust buffer size */
-			mem = realloc(tcp_client->packet, header_len + ntohs(tcp_client->packet->length));
-			if(!mem) {
-				fprintf(stderr, "out of memory when reading from TCP client\n");
-				return -1;
-			}
-			tcp_client->packet = (struct alfred_tlv *)mem;
-			return 0;
+	if(tcp_client->read == header_len && tcp_client->packet->length > 0) {
+		/* there's payload, so adjust buffer size */
+		mem = realloc(tcp_client->packet, header_len + ntohs(tcp_client->packet->length));
+		if(!mem) {
+			fprintf(stderr, "out of memory when reading from TCP client\n");
+			return -1;
 		}
+		tcp_client->packet = (struct alfred_tlv *)mem;
+	}
 
-		/* no payload: handle packet */
-		/* no relevant types here for now */
-
-		/* close connection */
-		return -1;
-	} else if(tcp_client->read == header_len + ntohs(tcp_client->packet->length)) {
-		/* with payload: handle packet */
+	if(tcp_client->read == header_len + ntohs(tcp_client->packet->length)) {
+		/* packet is complete */
 		switch(tcp_client->packet->type) {
 		case ALFRED_REQUEST:
 			process_alfred_request(globals, NULL, NULL,
