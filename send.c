@@ -33,6 +33,29 @@
 #include "packet.h"
 #include "list.h"
 
+int connect_tcp(struct interface *interface, const struct in6_addr *dest)
+{
+	struct sockaddr_in6 dest_addr;
+	int sock;
+
+	memset(&dest_addr, 0, sizeof(dest_addr));
+	dest_addr.sin6_family = AF_INET6;
+	dest_addr.sin6_port = htons(ALFRED_PORT);
+	dest_addr.sin6_scope_id = interface->scope_id;
+	memcpy(&dest_addr.sin6_addr, dest, sizeof(*dest));
+
+	sock = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	if (sock < 0)
+		return -1;
+	
+	if (connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6)) < 0) {
+		close(sock);
+		return -1;
+	}
+
+	return sock;
+}
+
 int announce_master(struct globals *globals)
 {
 	struct alfred_announce_master_v0 announcement;
@@ -155,6 +178,7 @@ int sync_data(struct globals *globals)
 {
 	struct hash_it_t *hashit = NULL;
 	struct interface *interface;
+	int sock;
 
 	/* send local data and data from our clients to (all) other servers */
 	list_for_each_entry(interface, &globals->interfaces, list) {
@@ -162,9 +186,20 @@ int sync_data(struct globals *globals)
 						      hashit))) {
 			struct server *server = hashit->bucket->data;
 
-			push_data(globals, interface, &server->address,
-				  SOURCE_FIRST_HAND, NO_FILTER,
-				  get_random_id(), -1);
+			if (globals->requestproto == REQPROTO_TCP) {
+				sock = connect_tcp(interface, &server->address);
+				if(sock < 0)
+					continue;
+				push_data(globals, interface, &server->address,
+					  SOURCE_FIRST_HAND, NO_FILTER,
+					  get_random_id(), sock);
+				shutdown(sock, SHUT_RDWR);
+				close(sock);
+			} else {
+				push_data(globals, interface, &server->address,
+					  SOURCE_FIRST_HAND, NO_FILTER,
+					  get_random_id(), -1);
+			}
 		}
 	}
 	return 0;
@@ -220,20 +255,10 @@ ssize_t send_alfred_stream(struct interface *interface,
 {
 	ssize_t ret;
 	int sock;
-	struct sockaddr_in6 dest_addr;
 	struct tcp_client *tcp_client;
 
-	memset(&dest_addr, 0, sizeof(dest_addr));
-	dest_addr.sin6_family = AF_INET6;
-	dest_addr.sin6_port = htons(ALFRED_PORT);
-	dest_addr.sin6_scope_id = interface->scope_id;
-	memcpy(&dest_addr.sin6_addr, dest, sizeof(*dest));
-
-	sock = socket(PF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	sock = connect_tcp(interface, dest);
 	if (sock < 0)
-		return -1;
-	
-	if (connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6)) < 0)
 		return -1;
 
 	ret = send(sock, buf, length, MSG_NOSIGNAL);
