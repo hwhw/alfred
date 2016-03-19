@@ -490,12 +490,26 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 		/* packet is complete */
 		switch(tcp_client->packet->type) {
 		case ALFRED_REQUEST:
-			process_alfred_request(globals, NULL, NULL,
+			process_alfred_request(globals, NULL, &tcp_client->address,
 					       (struct alfred_request_v0 *)tcp_client->packet,
 					       tcp_client->netsock);
 			break;
 		case ALFRED_PUSH_DATA:
-			// TODO
+			process_alfred_push_data(globals, &tcp_client->address,
+						 (struct alfred_push_data_v0 *)tcp_client->packet);
+
+			/* do not close connection, but expect more packets */
+			mem = realloc(tcp_client->packet, header_len);
+			if(!mem) {
+				fprintf(stderr, "out of memory when reading from TCP client\n");
+				return -1;
+			}
+			tcp_client->packet = (struct alfred_tlv *)mem;
+			tcp_client->read = 0;
+			return 0;
+		case ALFRED_STATUS_TXEND:
+			process_alfred_status_txend(globals, &tcp_client->address,
+						    (struct alfred_status_v0 *)tcp_client->packet);
 			break;
 		}
 		/* close connection */
