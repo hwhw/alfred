@@ -251,7 +251,7 @@ ssize_t send_alfred_stream(struct interface *interface,
 	if(!tcp_client) {
 		goto tcp_drop;
 	}
-	tcp_client->packet = malloc(sizeof(struct alfred_tlv));
+	tcp_client->packet = calloc(1, sizeof(struct alfred_tlv));
 	if(!tcp_client->packet) {
 		free(tcp_client);
 		goto tcp_drop;

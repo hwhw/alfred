@@ -535,7 +535,7 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
 				goto tcp_drop;
 			}
-			tcp_client->packet = malloc(sizeof(struct alfred_tlv));
+			tcp_client->packet = calloc(1, sizeof(struct alfred_tlv));
 			if(!tcp_client->packet) {
 				fprintf(stderr, "out of memory, cannot handle TCP client connection\n");
 				free(tcp_client);
