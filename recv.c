@@ -475,9 +475,7 @@ int recv_alfred_stream(struct globals *globals, struct tcp_client *tcp_client)
 
 	tcp_client->read += res;
 
-	if(tcp_client->read < header_len) {
-		return 0;
-	} else if(tcp_client->read == header_len) {
+	if(tcp_client->read == header_len) {
 		if(tcp_client->packet->length > 0) {
 			/* there's payload, so adjust buffer size */
 			mem = realloc(tcp_client->packet, header_len + tcp_client->packet->length);
