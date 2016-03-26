@@ -222,6 +222,7 @@ static int unix_sock_req_data(struct globals *globals,
 {
 	int len;
 	uint16_t id;
+	uint8_t *buf;
 	struct transaction_head *head = NULL;
 	struct interface *interface;
 
@@ -252,10 +253,15 @@ static int unix_sock_req_data(struct globals *globals,
 	head->requested_type = request->requested_type;
 
 	if (globals->requestproto == REQPROTO_TCP) {
-		if (!send_alfred_stream(interface,
-					&globals->best_server->address,
-					request, sizeof(*request)))
-			return 0;
+		buf = malloc(sizeof(*request));
+		if (buf) {
+			memcpy(buf, request, sizeof(*request));
+			if (!open_alfred_stream(interface,
+						&globals->best_server->address,
+						buf, sizeof(*request),
+						CLOSE_WHEN_READ))
+				return 0;
+		}
 	}
 
 	/* default and fallback case: UDP */

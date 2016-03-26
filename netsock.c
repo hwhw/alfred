@@ -88,7 +88,10 @@ void netsock_close_all(struct globals *globals)
 			shutdown(tcp_connection->netsock, SHUT_RDWR);
 			close(tcp_connection->netsock);
 			list_del(&tcp_connection->list);
-			free(tcp_connection->packet);
+			if(tcp_connection->packet)
+				free(tcp_connection->packet);
+			if(tcp_connection->send_packet)
+				free(tcp_connection->send_packet);
 			free(tcp_connection);
 		}
 		if (interface->netsock >= 0)
@@ -233,6 +236,7 @@ static int netsock_open(struct interface *interface)
 	struct ipv6_mreq mreq;
 	struct ifreq ifr;
 	int ret;
+	int yes;
 
 	interface->netsock = -1;
 	interface->netsock_mcast = -1;
@@ -307,6 +311,13 @@ static int netsock_open(struct interface *interface)
 
 	if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
 		perror("can't bind");
+		goto err;
+	}
+
+	yes = 1;
+	if (setsockopt(sock_tcp, SOL_SOCKET, SO_REUSEADDR,
+		&yes, sizeof(yes)) == -1) {
+		perror("setsockopt: SO_REUSEADDR");
 		goto err;
 	}
 
@@ -422,9 +433,47 @@ int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock)
 
 		list_for_each_entry(tcp_connection,
 				    &interface->tcp_connections, list) {
-			FD_SET(tcp_connection->netsock, fds);
-			if (maxsock < tcp_connection->netsock)
-				maxsock = tcp_connection->netsock;
+			if (tcp_connection->close != CLOSED_FOR_READING) {
+				FD_SET(tcp_connection->netsock, fds);
+				if (maxsock < tcp_connection->netsock)
+					maxsock = tcp_connection->netsock;
+			}
+		}
+	}
+
+	return maxsock;
+}
+
+int netsock_prepare_write_select(struct globals *globals, fd_set *fds,
+				 int maxsock)
+{
+	struct interface *interface;
+	struct tcp_connection *tcp_connection;
+
+	list_for_each_entry(interface, &globals->interfaces, list) {
+		list_for_each_entry(tcp_connection,
+				    &interface->tcp_connections, list) {
+			if (tcp_connection->send_length) {
+				/* monitor fd only if we actually have
+				 * data we'd like to send
+				 */
+				FD_SET(tcp_connection->netsock, fds);
+				if (maxsock < tcp_connection->netsock)
+					maxsock = tcp_connection->netsock;
+			} else if (tcp_connection->close == CLOSE_WHEN_WRITTEN) {
+				/* we have a TCP connection that should be
+				 * closed when everything is written and it
+				 * seems that is the case now
+				 */
+				shutdown(tcp_connection->netsock, SHUT_RDWR);
+				close(tcp_connection->netsock);
+				list_del(&tcp_connection->list);
+				if (tcp_connection->packet)
+					free(tcp_connection->packet);
+				if (tcp_connection->send_packet)
+					free(tcp_connection->send_packet);
+				free(tcp_connection);
+			}
 		}
 	}
 
@@ -443,7 +492,10 @@ void netsock_check_error(struct globals *globals, fd_set *errfds)
 				shutdown(tcp_connection->netsock, SHUT_RDWR);
 				close(tcp_connection->netsock);
 				list_del(&tcp_connection->list);
-				free(tcp_connection->packet);
+				if (tcp_connection->packet)
+					free(tcp_connection->packet);
+				if (tcp_connection->send_packet)
+					free(tcp_connection->send_packet);
 				free(tcp_connection);
 			}
 		}
@@ -500,17 +552,22 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 		list_for_each_entry_safe(tcp_connection, tc,
 					 &interface->tcp_connections, list) {
 			if (FD_ISSET(tcp_connection->netsock, fds)) {
-				if (recv_alfred_stream(globals,
-						       tcp_connection)) {
-					/* upon error, close and free TCP
-					 * connection
-					 */
-					shutdown(tcp_connection->netsock,
-						 SHUT_RDWR);
-					close(tcp_connection->netsock);
-					list_del(&tcp_connection->list);
-					free(tcp_connection->packet);
-					free(tcp_connection);
+				if (recv_alfred_stream(globals, interface,
+							 tcp_connection) < 0) {
+					if(tcp_connection->close == CLOSE_WHEN_READ) {
+						shutdown(tcp_connection->netsock,
+							 SHUT_RDWR);
+						close(tcp_connection->netsock);
+						list_del(&tcp_connection->list);
+						if (tcp_connection->packet)
+							free(tcp_connection->packet);
+						if (tcp_connection->send_packet)
+							free(tcp_connection->send_packet);
+						free(tcp_connection);
+					} else {
+						tcp_connection->close =
+							CLOSED_FOR_READING;
+					}
 				}
 				recvs++;
 			}
@@ -541,7 +598,7 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 				goto tcp_drop;
 			}
 
-			tcp_connection = malloc(sizeof(*tcp_connection));
+			tcp_connection = calloc(1, sizeof(*tcp_connection));
 			if (!tcp_connection) {
 				fprintf(stderr, "out of memory, cannot handle "
 						"TCP client connection\n");
@@ -557,8 +614,9 @@ int netsock_receive_packet(struct globals *globals, fd_set *fds)
 				goto tcp_drop;
 			}
 
-			tcp_connection->read = 0;
 			tcp_connection->netsock = sock_client;
+			tcp_connection->close = CLOSE_WHEN_READ;
+
 			memcpy(&tcp_connection->address, &sin6.sin6_addr,
 			       sizeof(tcp_connection->address));
 			list_add(&tcp_connection->list,
@@ -569,6 +627,39 @@ tcp_drop:
 			close(sock_client);
 tcp_done:
 			recvs++;
+		}
+	}
+
+	return recvs;
+}
+
+int netsock_send(struct globals *globals, fd_set *fds)
+{
+	struct interface *interface;
+	struct tcp_connection *tcp_connection, *tc;
+	int recvs = 0;
+
+	list_for_each_entry(interface, &globals->interfaces, list) {
+		list_for_each_entry_safe(tcp_connection, tc,
+					 &interface->tcp_connections, list) {
+			if (FD_ISSET(tcp_connection->netsock, fds)) {
+				if(tcp_connection->send_length
+				   && send_alfred_stream(tcp_connection) < 0
+				   && (tcp_connection->close == CLOSE_WHEN_WRITTEN
+				       || tcp_connection->close == CLOSED_FOR_READING)
+				   ) {
+					shutdown(tcp_connection->netsock,
+						 SHUT_RDWR);
+					close(tcp_connection->netsock);
+					list_del(&tcp_connection->list);
+					if (tcp_connection->packet)
+						free(tcp_connection->packet);
+					if (tcp_connection->send_packet)
+						free(tcp_connection->send_packet);
+					free(tcp_connection);
+				}
+				recvs++;
+			}
 		}
 	}
 

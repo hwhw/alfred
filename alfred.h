@@ -102,12 +102,24 @@ enum clientmode {
 	CLIENT_CHANGE_INTERFACE,
 };
 
+enum tcp_close {
+	CLOSE_WHEN_READ,
+	CLOSE_WHEN_WRITTEN,
+	CLOSED_FOR_READING,
+};
+
 struct tcp_connection {
 	int netsock;
 	struct in6_addr address;
+
 	struct alfred_tlv *packet;
 	uint16_t read;
 
+	uint8_t *send_packet;
+	uint32_t send_length;
+	uint32_t written;
+
+	enum tcp_close close;
 	struct list_head list;
 };
 
@@ -157,6 +169,7 @@ struct globals {
 #define debugFree(ptr, num)	free(ptr)
 
 #define MAX_PAYLOAD ((1 << 16) - 1 - sizeof(struct udphdr))
+#define MAX_UDP_ANSWER 1280 - 40 - sizeof(struct udphdr)
 
 extern const struct in6_addr in6addr_localmcast;
 
@@ -174,6 +187,7 @@ int alfred_client_change_interface(struct globals *globals);
 int recv_alfred_packet(struct globals *globals, struct interface *interface,
 		       int recv_sock);
 int recv_alfred_stream(struct globals *globals,
+		       struct interface *interface,
 		       struct tcp_connection *tcp_connection);
 struct transaction_head *
 transaction_add(struct globals *globals, struct ether_addr mac, uint16_t id);
@@ -185,14 +199,17 @@ struct transaction_head *transaction_clean(struct globals *globals,
 /* send.c */
 int push_data(struct globals *globals, struct interface *interface,
 	      struct in6_addr *destination, enum data_source max_source_level,
-	      int type_filter, uint16_t tx_id, int socket);
+	      int type_filter, uint16_t tx_id,
+	      struct tcp_connection *tcp_connection);
 int announce_master(struct globals *globals);
 int push_local_data(struct globals *globals);
 int sync_data(struct globals *globals);
 ssize_t send_alfred_packet(struct interface *interface,
 			   const struct in6_addr *dest, void *buf, int length);
-ssize_t send_alfred_stream(struct interface *interface,
-			   const struct in6_addr *dest, void *buf, int length);
+ssize_t open_alfred_stream(struct interface *interface,
+			   const struct in6_addr *dest, void *buf, int length,
+			   enum tcp_close close_mode);
+ssize_t send_alfred_stream(struct tcp_connection *tcp_client);
 /* unix_sock.c */
 int unix_sock_read(struct globals *globals);
 int unix_sock_open_daemon(struct globals *globals);
@@ -209,8 +226,11 @@ int netsock_set_interfaces(struct globals *globals, char *interfaces);
 struct interface *netsock_first_interface(struct globals *globals);
 void netsock_reopen(struct globals *globals);
 int netsock_prepare_select(struct globals *globals, fd_set *fds, int maxsock);
+int netsock_prepare_write_select(struct globals *globals, fd_set *fds,
+				 int maxsock);
 void netsock_check_error(struct globals *globals, fd_set *errfds);
 int netsock_receive_packet(struct globals *globals, fd_set *fds);
+int netsock_send(struct globals *globals, fd_set *fds);
 int netsock_own_address(const struct globals *globals,
 			const struct in6_addr *address);
 /* util.c */

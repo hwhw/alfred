@@ -267,7 +267,10 @@ close:
 		shutdown(tcp_connection->netsock, SHUT_RDWR);
 		close(tcp_connection->netsock);
 		list_del(&tcp_connection->list);
-		free(tcp_connection->packet);
+		if (tcp_connection->packet)
+			free(tcp_connection->packet);
+		if (tcp_connection->send_packet)
+			free(tcp_connection->send_packet);
 		free(tcp_connection);
 	}
 	close(interface->netsock);
@@ -349,7 +352,7 @@ int alfred_server(struct globals *globals)
 {
 	int maxsock, ret, recvs;
 	struct timespec last_check, now, tv;
-	fd_set fds, errfds;
+	fd_set fds, wrfds, errfds;
 	int num_socks;
 
 	if (create_hashes(globals))
@@ -392,14 +395,23 @@ int alfred_server(struct globals *globals)
 		netsock_reopen(globals);
 
 		FD_ZERO(&fds);
+		FD_ZERO(&wrfds);
 		FD_ZERO(&errfds);
 		FD_SET(globals->unix_sock, &fds);
 		maxsock = globals->unix_sock;
 
+		/* testing write sockets might clean up socket list,
+		 * so this has to be done before proceeding to the
+		 * list of sockets tested for reading
+		 */
+		maxsock = netsock_prepare_write_select(globals, &wrfds,
+						       maxsock);
+		maxsock = netsock_prepare_write_select(globals, &errfds,
+						       maxsock);
 		maxsock = netsock_prepare_select(globals, &fds, maxsock);
 		maxsock = netsock_prepare_select(globals, &errfds, maxsock);
 
-		ret = pselect(maxsock + 1, &fds, NULL, &errfds, &tv, NULL);
+		ret = pselect(maxsock + 1, &fds, &wrfds, &errfds, &tv, NULL);
 
 		if (ret == -1) {
 			perror("main loop select failed ...");
@@ -415,6 +427,9 @@ int alfred_server(struct globals *globals)
 				if (recvs > 0)
 					continue;
 			}
+
+			if (netsock_send(globals, &wrfds) > 0)
+				continue;
 		}
 		clock_gettime(CLOCK_MONOTONIC, &last_check);
 

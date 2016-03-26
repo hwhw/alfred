@@ -303,7 +303,7 @@ static int process_alfred_request(struct globals *globals,
 				  struct interface *interface,
 				  struct in6_addr *source,
 				  struct alfred_request_v0 *request,
-				  int socket)
+				  struct tcp_connection *tcp_connection)
 {
 	int len;
 
@@ -316,7 +316,7 @@ static int process_alfred_request(struct globals *globals,
 		return -1;
 
 	push_data(globals, interface, source, SOURCE_SYNCED,
-		  request->requested_type, request->tx_id, socket);
+		  request->requested_type, request->tx_id, tcp_connection);
 
 	return 0;
 }
@@ -447,7 +447,8 @@ int recv_alfred_packet(struct globals *globals, struct interface *interface,
 	return 0;
 }
 
-int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_connection)
+int recv_alfred_stream(struct globals *globals, struct interface *interface,
+		       struct tcp_connection *tcp_connection)
 {
 	size_t to_read;
 	int res;
@@ -496,11 +497,12 @@ int recv_alfred_stream(struct globals *globals, struct tcp_connection *tcp_conne
 		/* packet is complete */
 		switch(tcp_connection->packet->type) {
 		case ALFRED_REQUEST:
-			process_alfred_request(globals, NULL,
+			tcp_connection->close = CLOSE_WHEN_WRITTEN;
+			process_alfred_request(globals, interface,
 					       &tcp_connection->address,
 					       (struct alfred_request_v0 *)tcp_connection->packet,
-					       tcp_connection->netsock);
-			break;
+					       tcp_connection);
+			return 0;
 		case ALFRED_PUSH_DATA:
 			process_alfred_push_data(globals, &tcp_connection->address,
 						 (struct alfred_push_data_v0 *)tcp_connection->packet);
